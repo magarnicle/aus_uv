@@ -15,6 +15,7 @@ import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 
+import android.widget.EditText;
 import android.widget.TextView;
 
 import com.google.android.gms.location.FusedLocationProviderClient;
@@ -31,6 +32,7 @@ import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 
 public class MainActivity extends AppCompatActivity {
@@ -38,6 +40,7 @@ public class MainActivity extends AppCompatActivity {
     private Button refresh;
     private TextView main_text;
 
+    private TextView status;
     private FusedLocationProviderClient fusedLocationClient;
 
     @Override
@@ -54,6 +57,7 @@ public class MainActivity extends AppCompatActivity {
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this);
 
         main_text = findViewById(R.id.main_text);
+        status = findViewById(R.id.status);
 
         refresh = findViewById(R.id.refresh);
         refresh.setOnClickListener(new View.OnClickListener() {
@@ -68,7 +72,11 @@ public class MainActivity extends AppCompatActivity {
         });
 
 
-        //refresh();
+        try {
+            refresh();
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     public void refresh() throws InterruptedException {
@@ -103,6 +111,17 @@ public class MainActivity extends AppCompatActivity {
                             @Override
                             public void run() {
 // Logic to handle location object
+                                runOnUiThread(new Runnable() {
+
+                                    @Override
+                                    public void run() {
+                                        try {
+                                            status.setText("Refreshing data...");
+                                        } catch (Exception e) {
+                                            e.printStackTrace();
+                                        }
+                                    }
+                                });
                                 JSONObject closest_site;
                                 if (Math.round(longitude[0]) == 149 && Math.round(latitude[0]) == -35) {
                                     // We're in Canberra - the default - so no need to look it up
@@ -113,6 +132,13 @@ public class MainActivity extends AppCompatActivity {
                                     }
                                 } else {
                                     closest_site = closestSite(latitude[0], longitude[0]);
+                                    if (closest_site == null) {
+                                        try {
+                                            closest_site = new JSONObject("{\"Name\": \"Canberra\", \"Latitude\": -35.31, \"Longitude\": 149.2}");
+                                        } catch (JSONException e) {
+                                            throw new RuntimeException(e);
+                                        }
+                                    }
                                 }
                                 JSONObject uv_data = null;
                                 try {
@@ -120,6 +146,22 @@ public class MainActivity extends AppCompatActivity {
                                 } catch (JSONException e) {
                                     throw new RuntimeException(e);
                                 }
+                                if (uv_data == null){
+                                    runOnUiThread(new Runnable() {
+
+                                        @Override
+                                        public void run() {
+                                            try {
+                                                status.setText("ERROR! Could not refresh UV data." +
+                                                        "\nPlease check internet connection.");
+                                            } catch (Exception e) {
+                                                e.printStackTrace();
+                                            }
+                                        }
+                                    });
+                                    return;
+                                }
+                                final String refresh_time;
                                 final String name;
                                 final double current_uv;
                                 final double max_so_far;
@@ -129,10 +171,12 @@ public class MainActivity extends AppCompatActivity {
                                     current_uv = uv_data.getDouble("CurrentUVIndex");
                                     max_so_far = uv_data.getDouble("MaximumUVLevel");
                                     forecast_values = uv_data.getJSONArray("GraphData");
+                                    refresh_time = uv_data.getString("CurrentDateTime");
                                 } catch (JSONException e) {
                                     throw new RuntimeException(e);
                                 }
                                 double max_today = 0.0;
+                                String max_occurs_at = "1900-01-01 00:00";
                                 for (int i = 0; i < forecast_values.length(); i++) {
                                     JSONObject forecast_value = null;
                                     try {
@@ -141,16 +185,20 @@ public class MainActivity extends AppCompatActivity {
                                         continue;
                                     }
                                     double forecast;
+                                    String forecast_date;
                                     try {
                                         forecast = forecast_value.getDouble("Forecast");
+                                        forecast_date = forecast_value.getString("Date");
                                     } catch (JSONException e) {
                                         continue;
                                     }
                                     if (forecast > max_today){
                                         max_today = forecast;
+                                        max_occurs_at = forecast_date;
                                     }
                                 }
                                 final double forecast_max = max_today;
+                                final String forecast_time = max_occurs_at;
                                 runOnUiThread(new Runnable() {
 
                                     @Override
@@ -159,10 +207,13 @@ public class MainActivity extends AppCompatActivity {
                                             main_text.setText(
                                                     new StringBuilder()
                                                             .append("Closest Site: ").append(name)
-                                                            .append("\nCurrent UV: ").append(current_uv)
-                                                            .append("\nMax UV So Far: ").append(max_so_far)
-                                                            .append("\nForecast Max UV Today: ").append(forecast_max)
+                                                            .append("\nCurrent UV: ").append(String.format("%.2f", current_uv))
+                                                            .append("\nMax UV So Far: ").append(String.format("%.2f", max_so_far))
+                                                            .append("\nForecast Max UV Today: ").append(String.format("%.2f", forecast_max))
+                                                            .append("\nForecast Max Occurs At: ").append(forecast_time.substring(11))
+                                                            .append("\nLast Refresh: ").append(refresh_time)
                                                             .toString());
+                                            status.setText("");
                                         } catch (Exception e) {
                                             e.printStackTrace();
                                         }
@@ -218,7 +269,7 @@ public class MainActivity extends AppCompatActivity {
 
                 return new JSONObject(response.toString());
             } else {
-                System.out.println("Error: HTTP response code " + responseCode);
+                status.setText("Error: HTTP response code " + responseCode);
             }
         } catch (IOException | JSONException e) {
             e.printStackTrace();
@@ -259,7 +310,7 @@ public class MainActivity extends AppCompatActivity {
 
                 return new JSONObject(response.toString());
             } else {
-                System.out.println("Error: HTTP response code " + responseCode);
+                status.setText("Error: HTTP response code " + responseCode);
             }
         } catch (IOException | JSONException e) {
             e.printStackTrace();
